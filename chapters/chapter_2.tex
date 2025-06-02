@@ -277,3 +277,226 @@ const linkDataArray = [
         }
     });
 \end{lstlisting}
+
+\textbf{\large 2.2.3 Преобразование диаграммы в DBML}
+\addcontentsline{tocdepth}{subsubsection}{2.2.3 Преобразование диаграммы в DBML}
+
+Обратный процесс преобразования текущего состояния диаграммы в DBML формат начинается с обхода всех узлов-таблиц (Листинг 4). Для каждой таблицы формируется соответствующая секция Table в DBML, включающая все ее поля с указанием типов данных и отметками о первичных ключах. Поля сохраняют свои исходные имена из диаграммы, а их уникальные идентификаторы используются только для внутреннего сопоставления.
+
+Далее система анализирует все связи между таблицами. Для каждой связи определяется, какие конкретно поля таблиц соединены (через анализ portId), и формируется соответствующая строка Ref в DBML. Направление связи соответствует направлению внешнего ключа в реляционной модели. Тип связи в текущей реализации не отражается в DBML-коде, так как стандарт DBML не предусматривает явного указания этого параметра.
+
+Листинг 4 - Функция преобразования диаграммы в DBML.
+\begin{lstlisting}[frame=single]
+function diagramToDBML() {
+    let dbml = '';
+    const nodes = myDiagram.nodes;
+    const links = myDiagram.links;
+
+    nodes.each(node => {
+        if (!node || !node.data || !node.data.key) return;
+        const tableName = node.data.key;
+        dbml += `Table ${tableName} {\n`;
+
+        if (node.data.items
+                && Array.isArray(node.data.items)) {
+            node.data.items.forEach(item => {
+                if (!item || !item.name || !item.type) 
+                return;
+
+                let field = `  ${item.name} ${item.type}`;
+                if (item.iskey) {
+                    field += ' [primary key]';
+                }
+                dbml += field + '\n';
+            });
+        }
+        dbml += '}\n\n';
+    });
+
+    links.each(link => {
+        if (!link) return;
+
+        const fromNode = link.fromNode;
+        const toNode = link.toNode;
+        if (!fromNode || !toNode 
+            || !fromNode.data || !toNode.data) return;
+
+        const fromPort = link.fromPort;
+        const toPort = link.toPort;
+        if (!fromPort || !toPort 
+            || !fromPort.portId || !toPort.portId) return;
+
+        const fromFieldId = fromPort.portId.split('_')[1];
+        const toFieldId = toPort.portId.split('_')[1];
+
+        const fromField = fromNode.data.items.find(
+            item => String(item.id) === String(fromFieldId)
+        );
+        const toField = toNode.data.items.find(
+            item => String(item.id) === String(toFieldId)
+        );
+
+        if (fromField && toField) {
+            dbml += `Ref: ${fromNode.data.key}.
+            ${fromField.name} > ${toNode.data.key}
+            .${toField.name}\n`;
+        }
+    });
+
+    return dbml;
+}
+\end{lstlisting}
+
+\textbf{\large 2.2.4 Механизм синхронизации DBML и диаграммы}
+\addcontentsline{tocdepth}{subsubsection}{2.2.4 Механизм синхронизации DBML и диаграммы}
+
+Синхронизация между текстовым редактором и диаграммой реализована через систему взаимных подписок на изменения. При любом изменении в диаграмме (добавление/удаление элементов, изменение свойств) срабатывает обработчик, который через небольшой промежуток времени (100мс) генерирует актуальный DBML и обновляет содержимое текстового редактора. Аналогично, при изменениях в текстовом редакторе система парсит новый DBML и соответствующим образом обновляет диаграмму (Листинг 5).
+
+Листинг 5 - Обработчик изменения диаграммы.
+\begin{lstlisting}[frame=single]
+    myDiagram.addDiagramListener("ChangedSelection",
+        function (e) {
+            if (isUpdatingFromDiagram) return;
+            const dbml = diagramToDBML();
+            if (window.editor
+                && window.editor.getValue() !== dbml) {
+                isUpdatingFromDiagram = true;
+                window.updateEditorFromDiagram(dbml);
+                setTimeout(() => {
+                    isUpdatingFromDiagram = false;
+                }, 100);
+            }
+        });
+\end{lstlisting}
+
+Для предотвращения бесконечных циклов обновления используется флаг isUpdating, который временно блокирует обработчики изменений при выполнении синхронизации в одном из направлений. Это гарантирует, что каждое изменение будет обработано только один раз, и система быстро придет к согласованному состоянию (Листинг 6).
+
+Листинг 6 - Функция debounce.
+\begin{lstlisting}[frame=single]
+let isUpdatingFromDiagram = false;
+
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+\end{lstlisting}
+
+На Рисунке 2 представлена BPMN диаграмма процесса выгрузки SQL-дампа.
+
+\renewcommand{\figurename}{Рисунок}
+\begin{figure}[htbp]
+    \centering % Центрируем изображение
+    \includegraphics[width=1\textwidth]{bpmn.png} 
+    \caption{BPMN диаграмма процесса выгрузки SQL}
+    \label{fig:analyze} % Метка для ссылок
+\end{figure}
+
+\newpage
+\textbf{\large 2.3 Алгоритм преобразования DBML в SQL}
+\addcontentsline{toc}{subsection}{2.3 Алгоритм преобразования DBML в SQL}
+
+Система предоставляет возможность конвертации DBML-схемы в SQL-скрипт для создания базы данных. Процесс конвертации происходит через цепочку взаимодействий между фронтендом, бэкендом и Node.js-скриптом конвертации.
+
+На Рисунке 3 представлена UML диаграмма процесса выгрузки SQL-дампа из приложения. Пользователю представлен выбор метода проектирования базы данных: с помощью графического интерфейса или посредством DBML.
+
+\renewcommand{\figurename}{Рисунок}
+\begin{figure}[htbp]
+    \centering % Центрируем изображение
+    \includegraphics[height=0.6\textwidth]{uml.png} 
+    \caption{UML диаграмма процесса выгрузки SQL}
+    \label{fig:analyze} % Метка для ссылок
+\end{figure}
+
+Процесс начинается на фронтенде, когда пользователь нажимает кнопку экспорта SQL. Обработчик события для кнопки exportSqlBtn получает текущий DBML-код из редактора Monaco, затем отправляет POST-запрос на адрес /builder/convert-dbml/. В теле запроса передается dbml-код и тип базы данных, ранее выбранный пользователем, для которого нужно будет сгенерировать SQL (Листинг 7).
+
+\newpage
+Листинг 7 - Обработчик события для кнопки exportSqlBtn.
+\begin{lstlisting}[frame=single]
+document.getElementById('exportSqlBtn')
+    .addEventListener('click',
+        async function () {
+            const dbmlCode = editor.getValue();
+            try {
+                const response = await fetch(
+                '/builder/convert-dbml/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    body: JSON.stringify({
+                        dbml: dbmlCode,
+                        db_type: window.DB_TYPE
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(await response.text());
+                }
+
+                const sqlCode = await response.text();
+
+                const blob = new Blob([sqlCode], 
+                        { type: 'text/sql' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'database_dump.sql';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+            } catch (error) {
+                console.error('Export failed:', error);
+            }
+        });
+\end{lstlisting}
+
+На серверной стороне определен обработчик conver\_dbml\_to\_sql (Листинг 8), который принимает POST-запрос с JSON-данными и извлекает DBML-код и тип базы данных. Затем запускается Node.js-скрипт convert.js через subprocess (библиотека Python). Данные в скрипте передаются через stdin, результат конвертации принимается через stdout.
+
+Листинг 8 - Функция convert\_dbml\_to\_sql.
+\begin{lstlisting}[frame=single]
+@csrf_exempt
+def convert_dbml_to_sql(request):
+    if request.method == 'POST':
+        if request.content_type == 'application/json':
+            data = json.loads(request.body)
+            dbml_code = data.get('dbml')
+            db_type = data.get('db_type', 'mysql')
+        else:
+            dbml_code = request.body.decode('utf-8')
+            db_type = 'mysql'
+
+        process = subprocess.Popen(
+            ['node', 'convert.js'],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        input_data = json.dumps({
+            'dbml': dbml_code,
+            'db_type': db_type
+        })
+
+        stdout, stderr = process.communicate(
+            input=input_data.encode('utf-8')
+        )
+        if process.returncode != 0:
+            return HttpResponse(f'Error: 
+            {stderr.decode("utf-8")}', status=500)
+        return HttpResponse(stdout, 
+            content_type='text/plain')
+    return HttpResponse('Only POST method is allowed', 
+            status=405)
+\end{lstlisting}
+
+Скрипт convert.js использует библиотеку @dbml/core для конвертации 
+DBML в SQL. Скрипт получает входные данные и парсит JSON с DBML-кодом и выбранным типом базы данных. Перед парсингом проверяет поддержку типа базы данных. После выводит результат в stdout, который далее получает функция convert\_dbml\_to\_sql (Листинг 8). После успешной конвертации проверяется код возврата процесса. В случае ошибки возвращается сообщение об ошибке, а при успехе возвращается сгенерированный SQL-код. Далее обработчик события кнопки exportSqlBtn (Листинг 7) создается Blob с SQL-кодом и генерирует временную ссылку для скачивания. После завершения процесса скачиваения очищаются временные ресурсы.
