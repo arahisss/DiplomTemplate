@@ -27,10 +27,10 @@ diploma presentation:
 
 %.pdf: %.tex
 	$(LATEX_COMPILER) $(LATEX_COMPILER_FLAGS) $*
-	@if (grep "citation{.*}" $*.aux > /dev/null); then \
-		$(BIBLIO_COMPILER) $(BIBLIO_COMPILER_FLAGS) $*; \
-		$(LATEX_COMPILER) $(LATEX_COMPILER_FLAGS) $*; \
-	fi
+	biber diploma
+
+	$(LATEX_COMPILER) $(LATEX_COMPILER_FLAGS) $*
+
 	$(LATEX_COMPILER) $(LATEX_COMPILER_FLAGS) $*
 
 clean:
