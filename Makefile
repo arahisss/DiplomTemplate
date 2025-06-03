@@ -1,6 +1,7 @@
 LATEX_COMPILER = pdflatex
 LATEX_COMPILER_FLAGS = -interaction=nonstopmode
-BIBLIO_COMPILER = bibtex
+# BIBLIO_COMPILER = bibtex
+BIBLIO_COMPILER = biber
 BIBLIO_COMPILER_FLAGS =
 
 RM = rm -f
